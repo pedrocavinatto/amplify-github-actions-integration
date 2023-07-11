@@ -1,0 +1,57 @@
+name: Deploy Amplify
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  build_deploy:
+    runs-on: ubuntu-latest
+    env:
+      AWS_ACCESS_KEY_ID: ${{ secrets.AWS_ACCESS_KEY_ID }}
+      AWS_SECRET_ACCESS_KEY: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+      AWS_DEFAULT_REGION: ${{ secrets.AWS_DEFAULT_REGION }}
+      AWS_DEFAULT_OUTPUT: json
+      APP_ID: ${{ secrets.AWS_AMPLIFY_APP_ID }}
+      BRANCH_NAME: main
+    steps:
+    - name: AWS Amplify Start Job
+      id: StartJob
+      run: echo "jobId=$(aws amplify start-job --app-id $APP_ID --branch-name $BRANCH_NAME --job-type RELEASE | jq -r '.jobSummary.jobId')" >> $GITHUB_OUTPUT
+    - name: AWS Amplify Build
+      env:
+        JOB_ID: ${{ steps.StartJob.outputs.jobId }}
+      run: |
+        while [[ "$(aws amplify get-job --app-id $APP_ID --branch-name $BRANCH_NAME --job-id $JOB_ID | jq -r '.job.summary.status')" =~ ^(PENDING|RUNNING)$ ]]; do sleep 1; done
+        RESULT="$(aws amplify get-job --app-id $APP_ID --branch-name $BRANCH_NAME --job-id $JOB_ID | jq -r '.job.steps | .[] | select(.stepName == "BUILD") | .status')"
+        echo "Build result: $RESULT"
+        LOG_URL="$(aws amplify get-job --app-id $APP_ID --branch-name $BRANCH_NAME --job-id $JOB_ID | jq -r '.job.steps | .[] | select(.stepName == "BUILD") | .logUrl')"
+        if [[ $RESULT == "SUCCEED" ]]; then
+          echo "Build succeeded."
+          echo "Step logs in Amplify:"
+          curl $LOG_URL
+        else
+          echo "Build failed."
+          echo "Step logs in Amplify:"
+          curl $LOG_URL
+          exit 1
+        fi
+    - name: AWS Amplify Deploy
+      env:
+        JOB_ID: ${{ steps.StartJob.outputs.jobId }}
+      run: |
+        RESULT="$(aws amplify get-job --app-id $APP_ID --branch-name $BRANCH_NAME --job-id $JOB_ID | jq -r '.job.steps | .[] | select(.stepName == "DEPLOY") | .status')"
+        echo "Deploy result: $RESULT"
+        LOG_URL="$(aws amplify get-job --app-id $APP_ID --branch-name $BRANCH_NAME --job-id $JOB_ID | jq -r '.job.steps | .[] | select(.stepName == "DEPLOY") | .logUrl')"
+        if [[ $RESULT == "SUCCEED" ]]; then
+          echo "Deploy succeeded."
+          echo "Step logs in Amplify:"
+          curl $LOG_URL
+        else
+          echo "Deploy failed."
+          echo "Step logs in Amplify:"
+          curl $LOG_URL
+          exit 1
+        fi
